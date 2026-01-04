@@ -48,16 +48,23 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         
         /* 오프라인 모드 표시 */
-        .offline-badge {
-            background-color: #fbbf24;
-            color: #92400e;
-            padding: 2px 8px;
+        .status-badge {
+            padding: 4px 10px;
             border-radius: 9999px;
             font-size: 0.75rem;
             font-weight: bold;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 5px;
+            transition: all 0.3s ease;
+        }
+        .status-cloud {
+            background-color: #dbeafe;
+            color: #1e40af;
+        }
+        .status-local {
+            background-color: #fef3c7;
+            color: #92400e;
         }
     </style>
 </head>
@@ -90,19 +97,20 @@
     <!-- 메인 컨텐츠 -->
     <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 w-full z-0">
         
-        <!-- 환영 메시지 -->
-        <div class="mb-10 text-center">
+        <!-- 환영 메시지 및 상태바 -->
+        <div class="mb-8 text-center">
+            <!-- 연결 상태 배지 (중요) -->
+            <div class="flex justify-center mb-4">
+                <span id="connection-status" class="status-badge status-local hidden">
+                    <i class="fas fa-spinner fa-spin"></i> 연결 중...
+                </span>
+            </div>
+
             <h2 class="text-3xl font-bold text-gray-800 mb-3">웹앱 바로가기</h2>
             <p class="text-gray-600 max-w-2xl mx-auto">
                 필요한 교육 도구를 선택하세요.<br>
                 <span class="text-sm text-blue-600 admin-only"><i class="fas fa-info-circle"></i> 관리자 모드: 드래그하여 순서를 바꾸거나 편집할 수 있습니다.</span>
             </p>
-            <!-- 오프라인 모드 안내 (숨김 처리됨) -->
-            <div id="offline-notice" class="hidden mt-2">
-                <span class="offline-badge">
-                    <i class="fas fa-wifi-slash"></i> 오프라인 모드 (내 컴퓨터에만 저장됨)
-                </span>
-            </div>
         </div>
 
         <!-- 로딩 인디케이터 -->
@@ -114,14 +122,21 @@
         <div id="app-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 opacity-0 transition-opacity duration-300">
             <!-- 카드가 여기에 동적으로 추가됩니다 -->
         </div>
+        
+        <!-- 재시도 버튼 (오프라인일 때만 표시) -->
+        <div id="retry-area" class="text-center mt-8 hidden">
+            <button onclick="location.reload()" class="text-sm text-gray-500 underline hover:text-blue-600">
+                페이지 새로고침하여 연결 재시도
+            </button>
+        </div>
 
     </main>
 
     <!-- 푸터 -->
     <footer class="bg-gray-800 text-gray-300 py-8 mt-auto">
         <div class="max-w-7xl mx-auto px-4 text-center">
-            <p class="mb-2">© 2026 교육연구사 이정도. All rights reserved.</p>
-            <p class="text-sm text-gray-500">문의: prindodo@fe.jne.kr</p>
+            <p class="mb-2">© 2024 교육연구사 이정도. All rights reserved.</p>
+            <p class="text-sm text-gray-500">문의: teacher@example.com</p>
         </div>
     </footer>
 
@@ -183,26 +198,28 @@
         // 전역 변수
         let db;
         let auth;
-        let isOfflineMode = false; // 오프라인 모드 상태 플래그
+        let isOfflineMode = false; 
         let apps = [];
         let isAdmin = false;
         let dragStartIndex;
-        const LOCAL_STORAGE_KEY = 'teacherLee_apps_backup'; // 로컬 저장소 키
+        const LOCAL_STORAGE_KEY = 'teacherLee_apps_backup'; 
 
         // Firebase 초기화 시도
         try {
             const app = initializeApp(firebaseConfig);
             auth = getAuth(app);
-            // 롱폴링 강제 설정
+            // 롱폴링 강제 설정 (학교망 뚫기용)
             db = initializeFirestore(app, {
                 experimentalForceLongPolling: true, 
             });
         } catch (e) {
-            console.error("Firebase Init Failed:", e);
-            enableOfflineMode("초기화 오류");
+            // 초기화 자체가 실패하면 조용히 로컬 모드로
+            console.warn("Firebase Init Skipped:", e.message);
+            updateStatusBadge("local", "설정 오류");
+            isOfflineMode = true;
         }
 
-        // 초기 데이터 (기본값)
+        // 초기 데이터
         const initialApps = [
             {
                 title: "학급 경영 도우미",
@@ -217,44 +234,93 @@
                 url: "https://www.google.com", 
                 icon: "fa-calculator",
                 color: "bg-green-500"
+            },
+            {
+                title: "수업 타이머 & 추첨기",
+                description: "수업 진행에 필요한 타이머와 발표자 랜덤 추첨 도구입니다.",
+                url: "https://www.google.com", 
+                icon: "fa-clock",
+                color: "bg-orange-500"
+            },
+            {
+                title: "가정통신문 아카이브",
+                description: "발송된 가정통신문을 검색하고 PDF로 저장하는 저장소입니다.",
+                url: "https://www.google.com", 
+                icon: "fa-envelope-open-text",
+                color: "bg-purple-500"
             }
         ];
 
+        // 상태 배지 업데이트 함수
+        function updateStatusBadge(type, text) {
+            const badge = document.getElementById('connection-status');
+            badge.classList.remove('hidden', 'status-cloud', 'status-local');
+            
+            if (type === 'cloud') {
+                badge.classList.add('status-cloud');
+                badge.innerHTML = `<i class="fas fa-cloud"></i> ${text || '클라우드 연동됨'}`;
+            } else {
+                badge.classList.add('status-local');
+                badge.innerHTML = `<i class="fas fa-hdd"></i> ${text || '내 컴퓨터 모드'}`;
+                document.getElementById('retry-area').classList.remove('hidden');
+            }
+        }
+
         // 앱 시작
         async function initApp() {
-            // 오프라인 모드면 바로 로컬 로드
+            // 브라우저가 이미 오프라인이면 즉시 로컬 모드
+            if (!navigator.onLine) {
+                console.log("Browser is offline. Switching to local mode.");
+                updateStatusBadge("local", "인터넷 연결 없음");
+                isOfflineMode = true;
+                loadAppsOffline();
+                return;
+            }
+
             if (isOfflineMode) {
                 loadAppsOffline();
                 return;
             }
 
             try {
+                // 타임아웃 5초 설정 (네트워크 지연 시 빠른 전환)
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("Timeout")), 5000)
+                );
+                
                 // 로그인 시도
-                await signInAnonymously(auth);
+                await Promise.race([
+                    signInAnonymously(auth),
+                    timeoutPromise
+                ]);
+                
                 console.log("Cloud: 로그인 성공");
                 await loadApps();
+                
             } catch (error) {
-                console.warn("Cloud 연결 실패, 오프라인 모드로 전환:", error.message);
-                enableOfflineMode("네트워크 연결 불가");
-                loadAppsOffline(); // 즉시 로컬 데이터 로드
+                console.warn("Cloud 연결 전환:", error.message);
+                
+                let reason = "네트워크 지연";
+                if (error.code === 'auth/configuration-not-found') reason = "인증 설정 필요";
+                else if (error.message.includes("offline")) reason = "네트워크 차단됨";
+                
+                updateStatusBadge("local", reason);
+                isOfflineMode = true;
+                loadAppsOffline(); 
             }
         }
 
-        // [기능 1] 오프라인 모드 활성화
-        function enableOfflineMode(reason) {
-            isOfflineMode = true;
-            document.getElementById('offline-notice').classList.remove('hidden');
-            document.getElementById('status-msg').innerHTML = `<span class='text-amber-600'>⚠️ ${reason} (자동 저장)</span>`;
-            console.log("오프라인 모드 활성화됨:", reason);
-        }
-
-        // [기능 2] 로컬 저장소에서 불러오기 (백업본)
+        // 로컬 로드 함수
         function loadAppsOffline() {
             const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
             if (saved) {
                 try {
-                    apps = JSON.parse(saved);
-                    console.log("Local: 데이터 로드 성공");
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        apps = parsed;
+                    } else {
+                        apps = [...initialApps];
+                    }
                 } catch(e) {
                     apps = [...initialApps];
                 }
@@ -264,67 +330,97 @@
             renderApps();
         }
 
-        // [기능 3] DB에서 불러오기
+        // 클라우드 로드 함수
         async function loadApps() {
             try {
                 const docRef = doc(db, "settings", "main");
                 const docSnap = await getDoc(docRef);
+                
                 if (docSnap.exists()) {
-                    apps = docSnap.data().appList || [];
-                    // 성공 시 로컬에도 백업 저장
+                    // 데이터가 있으면 불러옴
+                    const data = docSnap.data().appList;
+                    apps = Array.isArray(data) ? data : [];
+                    
+                    updateStatusBadge("cloud", "클라우드 저장됨");
+                    // 로컬 백업 동기화
                     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(apps));
+                    
                 } else {
+                    // 데이터가 없으면 초기값으로 생성
+                    console.log("Cloud: 데이터 없음 -> 초기값 생성");
                     apps = [...initialApps];
+                    try {
+                        await setDoc(docRef, { appList: apps });
+                        updateStatusBadge("cloud", "초기 설정 완료");
+                    } catch(writeErr) {
+                        // 쓰기 실패 시 경고만 하고 로컬 모드로 동작
+                        console.warn("초기 데이터 저장 실패 (읽기 전용):", writeErr);
+                        updateStatusBadge("local", "읽기 전용 모드");
+                    }
                 }
+                
                 renderApps();
             } catch (error) {
-                // 불러오기 실패 시 오프라인 모드로 전환
-                console.error("Cloud 로드 실패:", error);
-                enableOfflineMode("데이터 로드 실패");
+                // *** 에러 처리 개선: 빨간 에러 메시지 방지 ***
+                const isOfflineError = error.message.includes("offline") || error.code === 'unavailable';
+                
+                if (isOfflineError) {
+                    // 에러가 아닌 경고(warn)로 처리
+                    console.warn("Cloud Load Skipped (Offline):", error.message);
+                    updateStatusBadge("local", "네트워크 차단됨");
+                } else {
+                    // 진짜 에러만 로그 출력
+                    console.error("Cloud 로드 오류:", error);
+                    let msg = "오류 발생";
+                    if (error.code === 'permission-denied') msg = "권한 없음";
+                    updateStatusBadge("local", msg);
+                }
+                
+                // 안전하게 로컬 모드로 전환
+                isOfflineMode = true;
                 loadAppsOffline();
             }
         }
 
-        // [기능 4] 데이터 저장 (하이브리드 방식)
+        // 저장 함수
         async function saveApps() {
-            // 1. 무조건 로컬에 먼저 저장 (가장 중요)
+            // 1. 로컬 저장 (안전장치)
             localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(apps));
 
-            // 2. 오프라인 모드면 여기서 끝
             if (isOfflineMode) {
-                showSaveStatus("내 컴퓨터에만 저장됨 (오프라인)");
+                showSaveStatus("내 컴퓨터에만 저장됨");
                 return;
             }
 
-            // 3. 온라인이면 클라우드 시도
             if (!auth.currentUser) {
-                 // 로그인 풀렸으면 재시도
-                 try { await signInAnonymously(auth); } catch(e) { 
-                     enableOfflineMode("인증 만료"); 
-                     showSaveStatus("내 컴퓨터에만 저장됨");
+                 try { await signInAnonymously(auth); } 
+                 catch(e) { 
+                     updateStatusBadge("local", "인증 풀림");
                      return; 
                 }
             }
 
             try {
-                document.getElementById('status-msg').innerText = "클라우드 저장 중...";
+                document.getElementById('status-msg').innerText = "동기화 중...";
                 const docRef = doc(db, "settings", "main");
                 await setDoc(docRef, { appList: apps });
-                showSaveStatus("모든 기기에 저장 완료");
+                
+                showSaveStatus("저장 완료");
+                updateStatusBadge("cloud");
+                
             } catch (error) {
-                console.error("Cloud 저장 실패:", error);
-                // 실패 시 오프라인 모드로 전환하고 사용자 안심시키기
-                enableOfflineMode("클라우드 오류");
-                showSaveStatus("내 컴퓨터에 저장됨 (클라우드 실패)");
+                // 저장 실패 시에도 빨간 에러 대신 경고로 처리
+                console.warn("Cloud 저장 실패:", error);
+                showSaveStatus("클라우드 저장 실패");
+                // 실패 시 오프라인 표시
+                updateStatusBadge("local", "저장 실패 (로컬보관)");
             }
         }
 
         function showSaveStatus(msg) {
             const el = document.getElementById('status-msg');
             el.innerText = msg;
-            setTimeout(() => { 
-                if(!isOfflineMode) el.innerText = ""; 
-            }, 3000);
+            setTimeout(() => { el.innerText = ""; }, 3000);
         }
 
         // 렌더링 함수
@@ -334,6 +430,11 @@
             
             loading.style.display = 'none';
             grid.classList.remove('opacity-0');
+
+            if (apps.length === 0) {
+                grid.innerHTML = '<div class="col-span-full text-center py-10 text-gray-500">등록된 목록이 비어있습니다.<br><button onclick="apps=[...initialApps];renderApps();saveApps();" class="mt-2 text-blue-500 underline">기본 목록 복원</button></div>';
+                return;
+            }
 
             grid.innerHTML = apps.map((app, index) => `
                 <div class="app-card-wrapper relative group h-full ${isAdmin ? 'draggable' : ''}" 
